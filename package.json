@@ -1,0 +1,22 @@
+{
+  "name": "threejs-game-engine",
+  "version": "0.1.0-rc.1",
+  "description": "Lo que hace falta para un juego en three.js, sin tocar three: loop de paso fijo, entrada como acciones (teclado, mouse, gamepad), estados del juego, entidades y sistemas, eventos, temporizadores y cámara de juego. Orquesta a los otros motores de la suite sin importarlos.",
+  "type": "module",
+  "license": "MIT",
+  "author": "EasyIndustry",
+  "repository": { "type": "git", "url": "git+https://github.com/EasyIndustry/threejs-game-engine.git" },
+  "exports": {
+    ".": "./src/index.js",
+    "./three": "./adapters/three/game.js"
+  },
+  "files": ["src", "adapters", "examples", "LICENSE", "README.md"],
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc -p ."
+  },
+  "peerDependencies": { "three": ">=0.160.0" },
+  "peerDependenciesMeta": { "three": { "optional": true } },
+  "devDependencies": { "typescript": "^6.0.0" },
+  "engines": { "node": ">=20" }
+}

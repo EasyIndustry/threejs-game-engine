@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Game engine</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #15161a; font: 13px system-ui, sans-serif; color: #ddd; }
+    #hud { position: absolute; left: 12px; top: 10px; line-height: 1.5; pointer-events: none; }
+    #centro { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; font-size: 22px; text-shadow: 0 2px 8px #000; text-align: center; }
+    kbd { background: #2a2c33; border-radius: 3px; padding: 0 4px; }
+  </style>
+</head>
+<body>
+  <div id="hud"></div>
+  <div id="centro"></div>
+  <script type="module">
+    // Un juego chiquito para probar el motor a ojo: un cubo que camina (WASD, flechas o el stick),
+    // salta (Espacio o A), junta monedas que aparecen solas (temporizador + evento), con un menú,
+    // una pausa encima del nivel (Esc o Start) y tres cámaras (1, 2, 3).
+    //
+    // Acá el "motor" es un envoltorio mínimo de three + OrbitControls con la forma que el juego
+    // espera (onFrame, view.set, view.suspend, view.claim, content). Con threejs-render-engine
+    // sería así, y el resto del archivo queda igual:
+    //
+    //   import { createEngine } from 'threejs-render-engine';
+    //   const motor = createEngine(document.body, { preset: 'warm', area: 30 });
+    //   const juego = createGame({ engine: motor, bindings: CONTROLES });
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { createGame } from '../adapters/three/game.js';
+
+    // ---------- un motor mínimo (en una app de verdad: threejs-render-engine) ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#15161a');
+    scene.fog = new THREE.Fog('#15161a', 30, 70);
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+    camera.position.set(8, 10, 14);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    scene.add(new THREE.HemisphereLight('#bcd', '#432', 1.2));
+    const sol = new THREE.DirectionalLight('#fff', 2);
+    sol.position.set(8, 15, 6);
+    sol.castShadow = true;
+    Object.assign(sol.shadow.camera, { left: -25, right: 25, top: 25, bottom: -25 });
+    sol.shadow.mapSize.set(2048, 2048);
+    scene.add(sol);
+    const content = new THREE.Group();
+    scene.add(content);
+    addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+
+    const alCuadro = new Set();
+    const bloqueos = new Set();
+    const reloj = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = reloj.getDelta();
+      for (const fn of alCuadro) fn(dt);
+      controls.enabled = bloqueos.size === 0;
+      if (controls.enabled) controls.update();
+      renderer.render(scene, camera);
+    });
+    const motor = {
+      content,
+      onFrame(fn) { alCuadro.add(fn); return () => alCuadro.delete(fn); },
+      view: {
+        set({ position, target }) {
+          if (position) camera.position.fromArray(position);
+          if (target) controls.target.fromArray(target);
+          camera.lookAt(controls.target);
+          return Promise.resolve(true);
+        },
+        suspend(name) { const k = Symbol(name); bloqueos.add(k); return () => bloqueos.delete(k); },
+        claim() { return () => {}; }, // OrbitControls no tiene filtro de gestos; render sí
+      },
+    };
+
+    // ---------- el juego ----------
+    const CONTROLES = {
+      saltar: ['Space', 'pad:a'],
+      pausa: ['Escape', 'pad:start'],
+      empezar: ['Enter', 'Space', 'pad:a', 'pad:start'],
+      camara1: ['Digit1'], camara2: ['Digit2'], camara3: ['Digit3'],
+      congelar: ['KeyP'], paso: ['Period'],
+      mover: { type: 'axis2', keys: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] }, pad: 'pad:left' },
+    };
+    const juego = createGame({ engine: motor, bindings: CONTROLES });
+    const { world, input, states, events, timers } = juego;
+
+    const piso = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: '#3a3d46' }));
+    piso.rotation.x = -Math.PI / 2;
+    piso.receiveShadow = true;
+    content.add(piso);
+    for (let i = 0; i < 12; i++) {
+      const caja = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1 + (i % 3), 1.5), new THREE.MeshStandardMaterial({ color: '#59607a' }));
+      const a = (i / 12) * Math.PI * 2;
+      caja.position.set(Math.cos(a) * 14, caja.geometry.parameters.height / 2, Math.sin(a) * 14);
+      caja.castShadow = caja.receiveShadow = true;
+      content.add(caja);
+    }
+
+    const cuerpo = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.8), new THREE.MeshStandardMaterial({ color: '#e0a040' }));
+    cuerpo.castShadow = true;
+    const nariz = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshStandardMaterial({ color: '#222' }));
+    nariz.position.set(0, 0.85, 0.45); // +z local es el frente
+    cuerpo.position.y = 0.6;           // el origen del grupo, en los pies
+    const heroeObj = new THREE.Group();
+    heroeObj.add(cuerpo, nariz);
+
+    const VELOCIDAD = 6, SALTO = 7, GRAVEDAD = 20;
+    const heroe = world.add({
+      name: 'heroe', tags: ['jugador'], object3d: heroeObj,
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0] },
+      velocity: [0, 0, 0], suelo: true,
+    });
+
+    // sistemas del paso fijo. El héroe se mueve relativo a la cámara: arriba es "hacia donde mira la cámara"
+    world.system('controlar', () => {
+      const [x, y] = input.axis2('mover');
+      const v = heroe.velocity;
+      const c = juego.camera.rig?.state;
+      let f = c ? [c.target[0] - c.position[0], c.target[2] - c.position[2]] : [0, -1];
+      const n = Math.hypot(f[0], f[1]) || 1;
+      f = [f[0] / n, f[1] / n];
+      const r = [-f[1], f[0]]; // la derecha de la pantalla
+      v[0] = (x * r[0] + y * f[0]) * VELOCIDAD; v[2] = (x * r[1] + y * f[1]) * VELOCIDAD;
+      if (x || y) heroe.transform.rotation[1] = Math.atan2(v[0], v[2]);
+      if (heroe.suelo && input.justPressed('saltar')) { v[1] = SALTO; heroe.suelo = false; events.emit('salto'); }
+    }, { order: 0 });
+    world.system('fisica', (dt) => {
+      for (const e of world.query('transform', 'velocity')) {
+        const p = e.transform.position, v = e.velocity;
+        v[1] -= GRAVEDAD * dt;
+        p[0] = THREE.MathUtils.clamp(p[0] + v[0] * dt, -19, 19);
+        p[1] += v[1] * dt;
+        p[2] = THREE.MathUtils.clamp(p[2] + v[2] * dt, -19, 19);
+        if (p[1] <= 0) { p[1] = 0; v[1] = 0; e.suelo = true; }
+      }
+    }, { order: 10 });
+    world.system('juntar', () => {
+      const h = heroe.transform.position;
+      for (const m of world.query('moneda', 'transform')) {
+        const p = m.transform.position;
+        if (Math.hypot(p[0] - h[0], p[1] - 0.6 - h[1], p[2] - h[2]) < 1.1) { world.remove(m); events.emit('moneda', m.moneda); }
+      }
+    }, { order: 20 });
+    // por cuadro: las monedas giran (no es lógica: va en update)
+    world.system('girar', (dt) => { for (const m of world.query('moneda', 'object3d')) m.object3d.rotation.y += dt * 3; }, { phase: 'update' });
+
+    const geoMoneda = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 24).rotateX(Math.PI / 2);
+    const matMoneda = new THREE.MeshStandardMaterial({ color: '#ffd23f', metalness: 0.6, roughness: 0.3, emissive: '#553300' });
+    function moneda() {
+      const obj = new THREE.Mesh(geoMoneda, matMoneda);
+      obj.castShadow = true;
+      obj.userData.noCollide = true; // la cámara no choca con las monedas
+      // sin transform.rotation: el giro es del sistema 'girar', no de la lógica
+      world.add({ moneda: 10, object3d: obj, transform: { position: [(Math.random() - 0.5) * 30, 0.9, (Math.random() - 0.5) * 30] } });
+    }
+
+    // ---------- los estados ----------
+    let puntos = 0, cancelarMonedas = null;
+    const centro = document.getElementById('centro');
+    // el menú y la pausa frenan el tiempo del juego (game.pause): el mundo y los temporizadores no
+    // corren, pero su update sí (con dt 0), y ahí leen la entrada
+    const menu = {
+      name: 'menú',
+      enter() { juego.pause(); centro.innerHTML = 'Juntá las monedas<br><small><kbd>Enter</kbd> / <kbd>Espacio</kbd> / A para empezar</small>'; },
+      update() { if (input.justPressed('empezar')) states.replace(nivel); },
+      exit() { juego.resume(); centro.textContent = ''; },
+    };
+    const nivel = {
+      name: 'nivel',
+      enter() {
+        puntos = 0;
+        for (const m of world.query('moneda')) world.remove(m);
+        for (let i = 0; i < 5; i++) moneda();
+        cancelarMonedas = timers.every(2, moneda);
+      },
+      update() { if (input.justPressed('pausa')) states.push(pausa); },
+      exit() { cancelarMonedas?.(); },
+    };
+    // la pausa es un estado encima del nivel: el nivel no corre, pero se sigue dibujando
+    const pausa = {
+      name: 'pausa',
+      enter() { juego.pause(); centro.innerHTML = 'Pausa<br><small><kbd>Esc</kbd> para seguir</small>'; },
+      update() { if (input.justPressed('pausa')) states.pop(); },
+      exit() { juego.resume(); centro.textContent = ''; },
+    };
+    events.on('moneda', (valor) => { puntos += valor; });
+
+    // ---------- la cámara: tres modos ----------
+    const MODOS = { camara1: 'behind', camara2: 'top', camara3: 'side' };
+    let modo = 'top';
+    juego.camera.follow(heroe, { mode: modo, damping: 0.12, lookAhead: 1.5, collide: true });
+    piso.userData.noCollide = true;
+    juego.loop.onUpdate(() => {
+      for (const [accion, m] of Object.entries(MODOS)) {
+        if (input.justPressed(accion) && m !== modo) { modo = m; juego.camera.rig.options({ mode: m }); }
+      }
+      // depurar: P congela el tiempo, el punto avanza un paso
+      if (input.justPressed('congelar')) juego.loop.paused ? juego.resume() : juego.pause();
+      if (input.justPressed('paso') && juego.loop.paused) juego.loop.stepOnce();
+    });
+
+    const hud = document.getElementById('hud');
+    juego.loop.onUpdate(() => {
+      const s = juego.stats();
+      hud.innerHTML = `puntos: <b>${puntos}</b> · estado: ${s.state} · cámara: ${modo}<br>` +
+        `paso ${s.frame} · ${s.steps} pasos este cuadro · ${s.entities} entidades · descartados ${s.dropped}${juego.loop.paused ? ' · <b>congelado</b> (<kbd>.</kbd> un paso)' : ''}<br>` +
+        `<small><kbd>WASD</kbd>/flechas/stick · <kbd>Espacio</kbd>/A salta · <kbd>Esc</kbd> pausa · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> cámara · <kbd>P</kbd> congela</small>`;
+    });
+
+    states.push(menu);
+    juego.start();
+    window.juego = juego; // para jugar desde la consola: juego.help(), juego.world.help()…
+  </script>
+</body>
+</html>
